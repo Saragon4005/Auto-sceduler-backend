@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 Test psycopg with CockroachDB.
 """
@@ -9,66 +8,28 @@ import random
 import time
 import uuid
 from argparse import ArgumentParser, RawTextHelpFormatter
+from typing import NamedTuple, Callable
 
 import psycopg
-from psycopg.errors import SerializationFailure, Error
+from psycopg.errors import Error, SerializationFailure
 from psycopg.rows import namedtuple_row
 
 
-def create_accounts(conn):
-    id1 = uuid.uuid4()
-    id2 = uuid.uuid4()
+def create_user(conn: psycopg.Connection[NamedTuple]):
+    id = uuid.uuid4()
     with conn.cursor() as cur:
         cur.execute(
-            "CREATE TABLE IF NOT EXISTS accounts (id UUID PRIMARY KEY, balance INT)"
-        )
+            "CREATE TABLE IF NOT EXISTS users ("
+            "id UUID DEFAULT gen_random_uuid() PRIMARY KEY,"
+            "username STRING(50) NOT NULL);")
         cur.execute(
-            "UPSERT INTO accounts (id, balance) VALUES (%s, 1000), (%s, 250)", (id1, id2))
+            "INSERT INTO users (id, username) VALUES (%s 'testname');", (id))
         logging.debug("create_accounts(): status message: %s",
                       cur.statusmessage)
-    return [id1, id2]
+    return id
 
 
-def delete_accounts(conn):
-    with conn.cursor() as cur:
-        cur.execute("DELETE FROM accounts")
-        logging.debug("delete_accounts(): status message: %s",
-                      cur.statusmessage)
-
-
-def print_balances(conn):
-    with conn.cursor() as cur:
-        print(f"Balances at {time.asctime()}:")
-        for row in cur.execute("SELECT id, balance FROM accounts"):
-            print("account id: {0}  balance: ${1:2d}".format(
-                row.id, row.balance))
-
-
-def transfer_funds(conn, frm, to, amount):
-    with conn.cursor() as cur:
-
-        # Check the current balance.
-        cur.execute("SELECT balance FROM accounts WHERE id = %s", (frm,))
-        from_balance = cur.fetchone()[0]
-        if from_balance < amount:
-            raise RuntimeError(
-                f"insufficient funds in {frm}: have {from_balance}, need {amount}"
-            )
-
-        # Perform the transfer.
-        cur.execute(
-            "UPDATE accounts SET balance = balance - %s WHERE id = %s", (
-                amount, frm)
-        )
-        cur.execute(
-            "UPDATE accounts SET balance = balance + %s WHERE id = %s", (
-                amount, to)
-        )
-
-    logging.debug("transfer_funds(): status message: %s", cur.statusmessage)
-
-
-def run_transaction(conn, op, max_retries=3):
+def run_transaction(conn, op: Callable, max_retries=3):
     """
     Execute the operation *op(conn)* retrying serialization failure.
 
